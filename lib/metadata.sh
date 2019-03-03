@@ -1,53 +1,66 @@
 #!/usr/bin/env bash
 
-log_initial_state() {
-  if "$YARN"; then
-    bd_set "node-package-manager" "yarn"
-    bd_set "has-node-lock-file" "true"
-  else
-    bd_set "node-package-manager" "npm"
-    bd_set "has-node-lock-file" "$NPM_LOCK"
+# variable shared by this whole module
+BUILD_DATA_FILE=""
+PREVIOUS_BUILD_DATA_FILE=""
+
+meta_create() {
+  local cache_dir="$1"
+  BUILD_DATA_FILE="$cache_dir/build-data/nodejs"
+  PREVIOUS_BUILD_DATA_FILE="$cache_dir/build-data/nodejs-prev"
+
+  # if the file already exists because it's from the last build, save it
+  if [[ -f "$BUILD_DATA_FILE" ]]; then
+    cp "$BUILD_DATA_FILE" "$PREVIOUS_BUILD_DATA_FILE"
   fi
 
-  bd_set "stack" "$STACK"
+  kv_create "$BUILD_DATA_FILE"
+  # make sure this doesnt grow over time
+  kv_clear "$BUILD_DATA_FILE"
 }
 
-generate_uuids() {
-  # generate a unique id for each build
-  bd_set "build-uuid" "$(uuid)"
-
-  # propagate an app-uuid forward unless the cache is cleared
-  if [[ -n "$(bd_prev_get "app-uuid")" ]]; then
-    bd_set "app-uuid" "$(bd_prev_get "app-uuid")"
-  else
-    bd_set "app-uuid" "$(uuid)"
-  fi
+meta_get() {
+  kv_get "$BUILD_DATA_FILE" "$1"
 }
 
-log_build_script_opt_in() {
-  local opted_in="$1"
-  local build_dir="$2"
-  local has_build_script has_heroku_build_script
+meta_set() {
+  kv_set "$BUILD_DATA_FILE" "$1" "$2"
+}
 
-  has_build_script=$(read_json "$build_dir/package.json" ".scripts.build")
-  has_heroku_build_script=$(read_json "$build_dir/package.json" ".scripts[\"heroku-postbuild\"]")
+# similar to mtime from stdlib
+meta_time() {
+  local key="$1"
+  local start="$2"
+  local end="${3:-$(nowms)}"
+  local time
+  time="$(echo "${start}" "${end}" | awk '{ printf "%.3f", ($2 - $1)/1000 }')"
+  kv_set "$BUILD_DATA_FILE" "$key" "$time"
+}
 
-  # if this app will be affected by the change
-  if [[ -z "$has_heroku_build_script" ]] && [[ -n "$has_build_script" ]]; then
-    mcount "affected-by-build-change"
+# similar to mtime from stdlib
+meta_time() {
+  local key="$1"
+  local start="$2"
+  local end="${3:-$(nowms)}"
+  local time
+  time="$(echo "$start" "$end" | awk '{ printf "%.3f", ($2 - $1)/1000 }')"
+  kv_set "$BUILD_DATA_FILE" "$1" "$time"
+}
 
-    if [[ "$opted_in" = "true" ]]; then
-      mcount "affected-by-build-change-opted-in"
-      bd_set "affected-but-opted-in" "true"
-    else
-      bd_set "affected-but-opted-in" "false"
-    fi
+# Retrieve a value from a previous build if it exists
+# This is useful to give the user context about what changed if the 
+# build has failed. Ex:
+#   - changed stacks
+#   - deployed with a new major version of Node
+#   - etc
+meta_prev_get() {
+  kv_get "$PREVIOUS_BUILD_DATA_FILE" "$1"
+}
 
-  fi
-
-  if [[ "$opted_in" = true ]]; then
-    bd_set "build-script-opt-in" "true"
-  else
-    bd_set "build-script-opt-in" "false"
-  fi
+log_meta_data() {
+  # print all values on one line in logfmt format
+  # https://brandur.org/logfmt
+  # the echo call ensures that all values are printed on a single line
+  # shellcheck disable=SC2005 disable=SC2046
+  echo $(kv_list "$BUILD_DATA_FILE")
 }
