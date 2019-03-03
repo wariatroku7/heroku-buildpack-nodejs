@@ -29,7 +29,7 @@ install_yarn() {
 }
 
 install_nodejs() {
-  local version=${1:-10.x}
+  local version=${1:-8.x}
   local dir="${2:?}"
   local platform="$3"
   local code os cpu
